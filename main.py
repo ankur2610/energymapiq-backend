@@ -4,7 +4,7 @@ import requests
 from typing import Optional, List
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel
 
 app = FastAPI()
 
@@ -45,7 +45,7 @@ class AlertRequest(BaseModel):
     Represents an alert subscription request. In a real implementation
     this would be persisted to a database for later processing.
     """
-    email: EmailStr
+    email: str
     postcode: str
     treatment: str
     threshold_weeks: float
