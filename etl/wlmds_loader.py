@@ -122,82 +122,69 @@ def _normalise_columns(df: pd.DataFrame) -> pd.DataFrame:
     df.columns = [str(c).strip().lower() for c in df.columns]
     return df
 
-
-def _pick_first_present(df: pd.DataFrame, aliases: List[str]) -> str:
+def _pick_first_present(df: pd.DataFrame, aliases: list[str]) -> str:
     for name in aliases:
         if name in df.columns:
             return name
     raise ValueError(f"None of the expected columns found. Tried: {aliases}. Actual: {list(df.columns)}")
 
-
 def parse_wlmds_excel(path: str, sheet_name: str) -> Iterable[Tuple[str, str, datetime, float, float, float]]:
     """
-    Parse a WLMDS Excel sheet into (ods_code, treatment_code, period_date, median_weeks, pct_over_18w, pct_over_52w).
-    Tries to be robust to column header variations.
+    Parse a WLMDS Excel sheet into:
+      (ods_code, treatment_code, period_date, median_weeks, pct_over_18w, pct_over_52w)
+    Robust to header variations.
     """
-    logging.info("Parsing Excel: %s (sheet: %s)", path, sheet_name)
-    df = pd.read_excel(path, sheet_name=sheet_name, engine="openpyxl")  # type: ignore
+    logging.info("Parsing WLMDS Excel file %s (sheet: %s)", path, sheet_name)
+    df = pd.read_excel(path, sheet_name=sheet_name, engine="openpyxl")
     df = _normalise_columns(df)
 
-    # Typical column header variants seen across releases:
-    ods_aliases = [
-        "organisation code", "organisation code (ods)", "provider code", "org code"
-    ]
-    tfn_aliases = [
-        "treatment function code", "treatment function", "tfc code", "tfc"
-    ]
-    period_aliases = [
-        "period ending", "period end", "period", "month", "reporting period"
-    ]
-    median_aliases = [
-        "median wait", "median wait (weeks)", "median (weeks)", "median weeks"
-    ]
-    gt18_aliases = [
-        "% waiting > 18 weeks", "% waiting over 18 weeks", "% > 18 weeks", "over 18 weeks (%)"
-    ]
-    gt52_aliases = [
-        "% waiting > 52 weeks", "% waiting over 52 weeks", "% > 52 weeks", "over 52 weeks (%)"
-    ]
+    # Typical variants seen across releases:
+    ods_aliases    = ["organisation code", "organisation code (ods)", "provider code", "org code"]
+    tfn_aliases    = ["treatment function code", "treatment function", "tfc code", "tfc"]
+    period_aliases = ["period ending", "period end", "period", "month", "reporting period"]
+    median_aliases = ["median wait", "median wait (weeks)", "median (weeks)", "median weeks"]
+    gt18_aliases   = ["% waiting > 18 weeks", "% waiting over 18 weeks", "% > 18 weeks", "over 18 weeks (%)"]
+    gt52_aliases   = ["% waiting > 52 weeks", "% waiting over 52 weeks", "% > 52 weeks", "over 52 weeks (%)"]
 
-    ods_col = _pick_first_present(df, ods_aliases)
-    tfn_col = _pick_first_present(df, tfn_aliases)
-    per_col = _pick_first_present(df, period_aliases)
-    med_col = _pick_first_present(df, median_aliases)
+    ods_col  = _pick_first_present(df, ods_aliases)
+    tfn_col  = _pick_first_present(df, tfn_aliases)
+    per_col  = _pick_first_present(df, period_aliases)
+    med_col  = _pick_first_present(df, median_aliases)
     gt18_col = _pick_first_present(df, gt18_aliases)
     gt52_col = _pick_first_present(df, gt52_aliases)
 
-    # Coerce/clean types
+    # Coerce date + drop rows without a date
     df[per_col] = pd.to_datetime(df[per_col], errors="coerce")
     df = df.dropna(subset=[per_col])
 
-    records: List[Tuple[str, str, datetime, float, float, float]] = []
+    def _to_float(v) -> float:
+        try:
+            return float(v)
+        except Exception:
+            return float("nan")
+
+    records: list[Tuple[str, str, datetime, float, float, float]] = []
     for _, row in df.iterrows():
         ods_code = str(row[ods_col]).strip()
         treatment_code = str(row[tfn_col]).strip()
 
-        # If treatment_code looks like "101 - General Surgery", take the code part
+        # If treatment has a label like "101 - General Surgery", keep just the code
         if "-" in treatment_code and treatment_code.split("-")[0].strip().isdigit():
             treatment_code = treatment_code.split("-")[0].strip()
 
-        period_date = pd.to_datetime(row[per_col]).to_pydatetime()
-
-        def _to_float(v) -> float:
-            try:
-                return float(v)
-            except Exception:
-                return float("nan")
-
-        median_weeks = _to_float(row[med_col])
-        pct_over_18w = _to_float(row[gt18_col])
-        pct_over_52w = _to_float(row[gt52_col])
+        period_date   = pd.to_datetime(row[per_col]).to_pydatetime()
+        median_weeks  = _to_float(row[med_col])
+        pct_over_18w  = _to_float(row[gt18_col])
+        pct_over_52w  = _to_float(row[gt52_col])
 
         if not ods_code or not treatment_code:
             continue
 
         records.append((ods_code, treatment_code, period_date, median_weeks, pct_over_18w, pct_over_52w))
 
-    logging.info("Parsed %d rows from sheet '%s'", len(records), sheet_name)
+    logging.info("Parsed %d records from WLMDS file", len(records))
     return records
+
 
 # ------------------------------------------------------------------------------
 # Database helpers
