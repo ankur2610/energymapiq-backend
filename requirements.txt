@@ -4,3 +4,7 @@ requests
 pydantic
 
 email-validator
+
+psycopg2-binary
+pandas
+openpyxl
