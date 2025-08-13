@@ -128,17 +128,56 @@ def _pick_first_present(df: pd.DataFrame, aliases: list[str]) -> str:
             return name
     raise ValueError(f"None of the expected columns found. Tried: {aliases}. Actual: {list(df.columns)}")
 
+def _find_header_row(df_raw: pd.DataFrame) -> int:
+    """
+    Scan rows to find the header row by looking for expected header keywords.
+    Returns the row index to use as header.
+    """
+    keywords = ["organisation", "treatment", "period", "median", "18", "52"]
+    for i in range(min(50, len(df_raw))):  # only scan top 50 rows
+        row_vals = " | ".join([str(v).strip().lower() for v in df_raw.iloc[i].tolist()])
+        if all(k in row_vals for k in ["organisation", "treatment", "period", "median"]):
+            return i
+    # fallback: first non-empty-ish row
+    for i in range(min(50, len(df_raw))):
+        non_na = [v for v in df_raw.iloc[i].tolist() if pd.notna(v)]
+        if len(non_na) >= 5:
+            return i
+    return 0  # worst-case fallback
+
 def parse_wlmds_excel(path: str, sheet_name: str) -> Iterable[Tuple[str, str, datetime, float, float, float]]:
     """
     Parse a WLMDS Excel sheet into:
       (ods_code, treatment_code, period_date, median_weeks, pct_over_18w, pct_over_52w)
-    Robust to header variations.
+    Robust to multi-row headers and header-name variations.
     """
-    logging.info("Parsing WLMDS Excel file %s (sheet: %s)", path, sheet_name)
-    df = pd.read_excel(path, sheet_name=sheet_name, engine="openpyxl")
+    logging.info("Parsing Excel: %s (sheet: %s)", path, sheet_name)
+
+    # Read without assuming header row
+    raw = pd.read_excel(path, sheet_name=sheet_name, header=None, engine="openpyxl")
+
+    hdr_idx = _find_header_row(raw)
+    headers = raw.iloc[hdr_idx].tolist()
+    # make simple, unique header names (fill NaNs, merge duplicates)
+    fixed_headers = []
+    last_seen = ""
+    counts = {}
+    for h in headers:
+        h = str(h).strip()
+        if not h or h.lower().startswith("unnamed"):
+            h = last_seen or "."
+        base = h
+        counts[base] = counts.get(base, 0) + 1
+        if counts[base] > 1:
+            h = f"{base} {counts[base]}"
+        fixed_headers.append(h)
+        last_seen = base
+
+    df = raw.iloc[hdr_idx + 1:].copy()
+    df.columns = fixed_headers
     df = _normalise_columns(df)
 
-    # Typical variants seen across releases:
+    # Flexible header aliases seen across releases
     ods_aliases    = ["organisation code", "organisation code (ods)", "provider code", "org code"]
     tfn_aliases    = ["treatment function code", "treatment function", "tfc code", "tfc"]
     period_aliases = ["period ending", "period end", "period", "month", "reporting period"]
@@ -153,7 +192,7 @@ def parse_wlmds_excel(path: str, sheet_name: str) -> Iterable[Tuple[str, str, da
     gt18_col = _pick_first_present(df, gt18_aliases)
     gt52_col = _pick_first_present(df, gt52_aliases)
 
-    # Coerce date + drop rows without a date
+    # Clean types
     df[per_col] = pd.to_datetime(df[per_col], errors="coerce")
     df = df.dropna(subset=[per_col])
 
@@ -167,8 +206,6 @@ def parse_wlmds_excel(path: str, sheet_name: str) -> Iterable[Tuple[str, str, da
     for _, row in df.iterrows():
         ods_code = str(row[ods_col]).strip()
         treatment_code = str(row[tfn_col]).strip()
-
-        # If treatment has a label like "101 - General Surgery", keep just the code
         if "-" in treatment_code and treatment_code.split("-")[0].strip().isdigit():
             treatment_code = treatment_code.split("-")[0].strip()
 
@@ -182,8 +219,9 @@ def parse_wlmds_excel(path: str, sheet_name: str) -> Iterable[Tuple[str, str, da
 
         records.append((ods_code, treatment_code, period_date, median_weeks, pct_over_18w, pct_over_52w))
 
-    logging.info("Parsed %d records from WLMDS file", len(records))
+    logging.info("Parsed %d rows from sheet '%s' (header row %d)", len(records), sheet_name, hdr_idx)
     return records
+
 
 
 # ------------------------------------------------------------------------------
